@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 
@@ -10,7 +10,7 @@ const navigation = [
   ["Agent Runs", "✦"],
   ["Conflicts", "⚠"],
   ["Activity", "◷"],
-  ["Settings", "⚙"]
+  ["Settings", "⚙"],
 ];
 
 function App() {
@@ -19,12 +19,14 @@ function App() {
   const [runs, setRuns] = useState([]);
   const [selectedPatient, setSelectedPatient] = useState(null);
   const [selectedRun, setSelectedRun] = useState(null);
-
   const [backendOnline, setBackendOnline] = useState(false);
   const [loading, setLoading] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-
   const [toast, setToast] = useState("");
+
+  // Prevent duplicate POST requests from rapid clicks,
+  // double-clicks, or duplicated button events.
+  const agentRunningRef = useRef(false);
 
   // --------------------------------------------------
   // LOAD DATA
@@ -46,7 +48,6 @@ function App() {
 
       if (runsResponse.ok) {
         const runsData = await runsResponse.json();
-
         setRuns(runsData.value || runsData || []);
       }
 
@@ -77,41 +78,73 @@ function App() {
   // RUN AGENT
   // --------------------------------------------------
 
-  const runAgent = async (patientId = "P001") => {
+  const runAgent = async (
+    patientId = "P001",
+    stayOnPatientDetail = false
+  ) => {
+    // HARD BLOCK against duplicate requests
+    if (agentRunningRef.current || loading) {
+      return;
+    }
+
+    agentRunningRef.current = true;
     setLoading(true);
 
     try {
       const response = await fetch(`${API}/api/agent/run`, {
         method: "POST",
         headers: {
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          patient_id: patientId
-        })
+          patient_id: patientId,
+        }),
       });
 
-      if (!response.ok) {
-        throw new Error("Agent failed");
+      let data;
+
+      try {
+        data = await response.json();
+      } catch {
+        data = {};
       }
 
-      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(
+          data.error ||
+            data.message ||
+            "Agent workflow failed."
+        );
+      }
 
+      // Save latest run
       setSelectedRun(data);
 
-      setPage("Agent Run");
-
+      // Refresh patient/run lists
       await loadData();
+
+      // IMPORTANT:
+      // If Run Agent was clicked from Patient Detail,
+      // stay on Patient Detail.
+      if (stayOnPatientDetail) {
+        setPage("Patient Detail");
+      } else {
+        setPage("Agent Run");
+      }
 
       showToast("Agent workflow completed successfully.");
     } catch (error) {
-      console.error(error);
+      console.error("Agent error:", error);
 
       showToast(
-        "Unable to run agent. Make sure Flask is running."
+        error.message ||
+          "Unable to run agent. Make sure Flask is running."
       );
     } finally {
       setLoading(false);
+
+      // Release duplicate-request lock
+      agentRunningRef.current = false;
     }
   };
 
@@ -132,11 +165,9 @@ function App() {
       const data = await response.json();
 
       setSelectedPatient(data);
-
       setPage("Patient Detail");
     } catch (error) {
       console.error(error);
-
       showToast("Unable to load patient.");
     }
   };
@@ -158,11 +189,9 @@ function App() {
       const data = await response.json();
 
       setSelectedRun(data);
-
       setPage("Agent Run");
     } catch (error) {
       console.error(error);
-
       showToast("Unable to load agent run.");
     }
   };
@@ -175,6 +204,7 @@ function App() {
       <header className="topbar">
 
         <button
+          type="button"
           className="menu-button"
           onClick={() =>
             setSidebarCollapsed(!sidebarCollapsed)
@@ -184,7 +214,6 @@ function App() {
         </button>
 
         <div className="brand">
-
           <div className="brand-icon">
             M
           </div>
@@ -193,17 +222,14 @@ function App() {
             <strong>MediSync</strong>
             <small>AI Clinical Agent</small>
           </div>
-
         </div>
 
         <div className="search-box">
-
           <span>⌕</span>
 
           <input
             placeholder="Search patients, runs, records..."
           />
-
         </div>
 
         <div className="top-actions">
@@ -221,16 +247,16 @@ function App() {
               : "Backend offline"}
           </span>
 
-          <button>♢</button>
+          <button type="button">
+            ♢
+          </button>
 
           <div className="profile">
             S
           </div>
 
         </div>
-
       </header>
-
 
       {/* ================= SIDEBAR ================= */}
 
@@ -247,8 +273,8 @@ function App() {
         </div>
 
         {navigation.map(([name, icon]) => (
-
           <button
+            type="button"
             key={name}
             className={
               page === name ||
@@ -261,7 +287,6 @@ function App() {
             }
             onClick={() => setPage(name)}
           >
-
             <span className="nav-icon">
               {icon}
             </span>
@@ -269,14 +294,10 @@ function App() {
             <span className="nav-text">
               {name}
             </span>
-
           </button>
-
         ))}
 
-
         <div className="safety-card">
-
           <strong>
             ◆ Safety Guardrails
           </strong>
@@ -286,11 +307,9 @@ function App() {
             <br />
             Human review enabled
           </small>
-
         </div>
 
       </aside>
-
 
       {/* ================= MAIN ================= */}
 
@@ -317,7 +336,6 @@ function App() {
           <Patients
             patients={patients}
             openPatient={openPatient}
-            runAgent={runAgent}
           />
         )}
 
@@ -326,6 +344,7 @@ function App() {
             patient={selectedPatient}
             back={() => setPage("Patients")}
             runAgent={runAgent}
+            loading={loading}
           />
         )}
 
@@ -359,10 +378,11 @@ function App() {
           />
         )}
 
-        {page === "Settings" && <Settings />}
+        {page === "Settings" && (
+          <Settings />
+        )}
 
       </main>
-
 
       {/* ================= TOAST ================= */}
 
@@ -376,7 +396,6 @@ function App() {
   );
 }
 
-
 // ==================================================
 // PAGE HEADER
 // ==================================================
@@ -385,14 +404,12 @@ function PageHeader({
   eyebrow,
   title,
   description,
-  action
+  action,
 }) {
-
   return (
     <div className="page-header">
 
       <div>
-
         <label>
           {eyebrow}
         </label>
@@ -404,7 +421,6 @@ function PageHeader({
         <p>
           {description}
         </p>
-
       </div>
 
       {action}
@@ -413,37 +429,35 @@ function PageHeader({
   );
 }
 
-
 // ==================================================
 // BUTTON
 // ==================================================
 
 function PrimaryButton({
   children,
-  onClick
+  onClick,
+  disabled = false,
 }) {
-
   return (
     <button
+      type="button"
       className="primary-button"
       onClick={onClick}
+      disabled={disabled}
     >
       {children}
     </button>
   );
 }
 
-
 // ==================================================
 // STATUS
 // ==================================================
 
 function Status({ text }) {
-
-  const isWarning =
-    String(text || "")
-      .toLowerCase()
-      .includes("review");
+  const isWarning = String(text || "")
+    .toLowerCase()
+    .includes("review");
 
   return (
     <span
@@ -458,7 +472,6 @@ function Status({ text }) {
   );
 }
 
-
 // ==================================================
 // DASHBOARD
 // ==================================================
@@ -469,30 +482,30 @@ function Dashboard({
   runAgent,
   openPatient,
   openRun,
-  loading
+  loading,
 }) {
-
-  const reviews =
-    runs.filter(
-      (run) => run.human_review_required
-    ).length;
+  const reviews = runs.filter(
+    (run) => run.human_review_required
+  ).length;
 
   return (
     <>
-
       <PageHeader
         eyebrow="OVERVIEW"
         title="Clinical Agent Dashboard"
         description="Monitor autonomous documentation, source reconciliation and human-review escalation."
         action={
           <PrimaryButton
-            onClick={() => runAgent("P001")}
+            onClick={() => runAgent("P001", false)}
+            disabled={loading}
           >
-            ✦ {loading ? "Running..." : "Run Agent"}
+            ✦{" "}
+            {loading
+              ? "Running..."
+              : "Run Agent"}
           </PrimaryButton>
         }
       />
-
 
       {/* STATS */}
 
@@ -524,7 +537,6 @@ function Dashboard({
 
       </div>
 
-
       {/* COLUMNS */}
 
       <div className="dashboard-grid">
@@ -537,17 +549,13 @@ function Dashboard({
           />
 
           {runs.length === 0 ? (
-
             <Empty>
               No agent runs yet.
             </Empty>
-
           ) : (
-
             runs
               .slice(0, 6)
               .map((run) => (
-
                 <RunRow
                   key={run.id}
                   run={run}
@@ -555,13 +563,10 @@ function Dashboard({
                     openRun(run.id)
                   }
                 />
-
               ))
-
           )}
 
         </section>
-
 
         <section className="card">
 
@@ -571,21 +576,20 @@ function Dashboard({
           />
 
           {patients.map((patient) => (
-
             <PatientRow
               key={patient.patient_id}
               patient={patient}
               onClick={() =>
-                openPatient(patient.patient_id)
+                openPatient(
+                  patient.patient_id
+                )
               }
             />
-
           ))}
 
         </section>
 
       </div>
-
 
       {/* WORKFLOW */}
 
@@ -606,9 +610,8 @@ function Dashboard({
             "Adaptation",
             "Draft",
             "Validation",
-            "Outcome"
+            "Outcome",
           ].map((step, index) => (
-
             <React.Fragment key={step}>
 
               <div
@@ -618,13 +621,11 @@ function Dashboard({
                     : "workflow-step"
                 }
               >
-
                 <small>
                   0{index + 1}
                 </small>
 
                 {step}
-
               </div>
 
               {index < 7 && (
@@ -634,17 +635,14 @@ function Dashboard({
               )}
 
             </React.Fragment>
-
           ))}
 
         </div>
 
       </section>
-
     </>
   );
 }
-
 
 // ==================================================
 // STAT CARD
@@ -653,9 +651,8 @@ function Dashboard({
 function StatCard({
   number,
   title,
-  subtitle
+  subtitle,
 }) {
-
   return (
     <div className="card stat-card">
 
@@ -675,16 +672,14 @@ function StatCard({
   );
 }
 
-
 // ==================================================
 // SECTION TITLE
 // ==================================================
 
 function SectionTitle({
   title,
-  subtitle
+  subtitle,
 }) {
-
   return (
     <div className="section-title">
 
@@ -700,18 +695,17 @@ function SectionTitle({
   );
 }
 
-
 // ==================================================
 // RUN ROW
 // ==================================================
 
 function RunRow({
   run,
-  onClick
+  onClick,
 }) {
-
   return (
     <button
+      type="button"
       className="data-row"
       onClick={onClick}
     >
@@ -745,18 +739,17 @@ function RunRow({
   );
 }
 
-
 // ==================================================
 // PATIENT ROW
 // ==================================================
 
 function PatientRow({
   patient,
-  onClick
+  onClick,
 }) {
-
   return (
     <button
+      type="button"
       className="data-row"
       onClick={onClick}
     >
@@ -776,7 +769,8 @@ function PatientRow({
           {" · "}
           {patient.age}
           {" · "}
-          {patient.sex || patient.gender}
+          {patient.sex ||
+            patient.gender}
         </small>
 
       </div>
@@ -789,19 +783,16 @@ function PatientRow({
   );
 }
 
-
 // ==================================================
 // PATIENTS
 // ==================================================
 
 function Patients({
   patients,
-  openPatient
+  openPatient,
 }) {
-
   return (
     <>
-
       <PageHeader
         eyebrow="PATIENT RECORDS"
         title="Patients"
@@ -813,7 +804,6 @@ function Patients({
         <table>
 
           <thead>
-
             <tr>
               <th>Patient</th>
               <th>ID</th>
@@ -821,17 +811,17 @@ function Patients({
               <th>Sex</th>
               <th></th>
             </tr>
-
           </thead>
 
           <tbody>
 
             {patients.map((patient) => (
-
               <tr key={patient.patient_id}>
 
                 <td>
-                  <b>{patient.name}</b>
+                  <b>
+                    {patient.name}
+                  </b>
                 </td>
 
                 <td>
@@ -852,6 +842,7 @@ function Patients({
                 <td>
 
                   <button
+                    type="button"
                     className="link-button"
                     onClick={() =>
                       openPatient(
@@ -865,7 +856,6 @@ function Patients({
                 </td>
 
               </tr>
-
             ))}
 
           </tbody>
@@ -879,11 +869,9 @@ function Patients({
         )}
 
       </section>
-
     </>
   );
 }
-
 
 // ==================================================
 // PATIENT DETAIL
@@ -892,17 +880,15 @@ function Patients({
 function PatientDetail({
   patient,
   back,
-  runAgent
+  runAgent,
+  loading,
 }) {
-
   if (!patient) {
-
     return (
       <Empty>
         No patient selected.
       </Empty>
     );
-
   }
 
   const data =
@@ -910,21 +896,19 @@ function PatientDetail({
 
   return (
     <>
-
       <button
+        type="button"
         className="back-button"
         onClick={back}
       >
         ← Patients
       </button>
 
-
       <PageHeader
         eyebrow="PATIENT DETAIL"
         title={data.name}
         description={`Synthetic record · ${data.patient_id}`}
       />
-
 
       <div className="patient-detail">
 
@@ -944,19 +928,31 @@ function PatientDetail({
 
           <p>
             {data.age} years ·{" "}
-            {data.sex || data.gender}
+            {data.sex ||
+              data.gender}
           </p>
+
+          {/* IMPORTANT:
+              This now stays on Patient Detail
+              after the agent finishes.
+          */}
 
           <PrimaryButton
             onClick={() =>
-              runAgent(data.patient_id)
+              runAgent(
+                data.patient_id,
+                true
+              )
             }
+            disabled={loading}
           >
-            ✦ Run Agent
+            ✦{" "}
+            {loading
+              ? "Running..."
+              : "Run Agent"}
           </PrimaryButton>
 
         </section>
-
 
         <section className="card">
 
@@ -980,7 +976,9 @@ function PatientDetail({
               title="Allergies"
               value={
                 patient.allergies
-                  ?.map((a) => a.substance)
+                  ?.map(
+                    (a) => a.substance
+                  )
                   .join(", ") ||
                 "No known allergies"
               }
@@ -1017,11 +1015,9 @@ function PatientDetail({
         </section>
 
       </div>
-
     </>
   );
 }
-
 
 // ==================================================
 // SOURCE
@@ -1029,9 +1025,8 @@ function PatientDetail({
 
 function Source({
   title,
-  value
+  value,
 }) {
-
   return (
     <div className="source">
 
@@ -1047,7 +1042,6 @@ function Source({
   );
 }
 
-
 // ==================================================
 // AGENT RUNS
 // ==================================================
@@ -1056,19 +1050,20 @@ function AgentRuns({
   runs,
   openRun,
   runAgent,
-  loading
+  loading,
 }) {
-
   return (
     <>
-
       <PageHeader
         eyebrow="AUTONOMOUS WORKFLOWS"
         title="Agent Runs"
         description="Every run is persisted with decisions, tool actions and validation."
         action={
           <PrimaryButton
-            onClick={() => runAgent("P001")}
+            onClick={() =>
+              runAgent("P001", false)
+            }
+            disabled={loading}
           >
             ✦{" "}
             {loading
@@ -1078,13 +1073,11 @@ function AgentRuns({
         }
       />
 
-
       <section className="card table-card">
 
         <table>
 
           <thead>
-
             <tr>
               <th>Run</th>
               <th>Patient</th>
@@ -1092,13 +1085,11 @@ function AgentRuns({
               <th>Review</th>
               <th></th>
             </tr>
-
           </thead>
 
           <tbody>
 
             {runs.map((run) => (
-
               <tr key={run.id}>
 
                 <td>
@@ -1124,6 +1115,7 @@ function AgentRuns({
                 <td>
 
                   <button
+                    type="button"
                     className="link-button"
                     onClick={() =>
                       openRun(run.id)
@@ -1135,7 +1127,6 @@ function AgentRuns({
                 </td>
 
               </tr>
-
             ))}
 
           </tbody>
@@ -1149,11 +1140,9 @@ function AgentRuns({
         )}
 
       </section>
-
     </>
   );
 }
-
 
 // ==================================================
 // AGENT EXECUTION
@@ -1161,17 +1150,14 @@ function AgentRuns({
 
 function AgentRun({
   run,
-  back
+  back,
 }) {
-
   if (!run) {
-
     return (
       <Empty>
         Open an agent run to inspect it.
       </Empty>
     );
-
   }
 
   const record =
@@ -1179,14 +1165,13 @@ function AgentRun({
 
   return (
     <>
-
       <button
+        type="button"
         className="back-button"
         onClick={back}
       >
         ← Agent Runs
       </button>
-
 
       <PageHeader
         eyebrow={`RUN #${run.run_id || run.id}`}
@@ -1201,7 +1186,6 @@ function AgentRun({
           />
         }
       />
-
 
       <div className="run-layout">
 
@@ -1218,7 +1202,6 @@ function AgentRun({
 
             {(run.steps || []).map(
               (step, index) => (
-
                 <div
                   className="timeline-step"
                   key={index}
@@ -1231,11 +1214,11 @@ function AgentRun({
                         : "timeline-dot"
                     }
                   >
-                    {step.status === "warning"
+                    {step.status ===
+                    "warning"
                       ? "!"
                       : "✓"}
                   </div>
-
 
                   <div className="timeline-content">
 
@@ -1248,7 +1231,9 @@ function AgentRun({
                     </h3>
 
                     <p>
-                      <b>Decision:</b>{" "}
+                      <b>
+                        Decision:
+                      </b>{" "}
                       {step.decision}
                     </p>
 
@@ -1259,14 +1244,12 @@ function AgentRun({
                   </div>
 
                 </div>
-
               )
             )}
 
           </div>
 
         </section>
-
 
         {/* SIDE */}
 
@@ -1280,9 +1263,9 @@ function AgentRun({
             />
 
             {(record.identified_conflicts ||
+              record.conflicts ||
               []).map(
               (conflict, index) => (
-
                 <div
                   className="conflict"
                   key={index}
@@ -1290,30 +1273,48 @@ function AgentRun({
 
                   <b>
                     ⚠{" "}
-                    {conflict.type}
+                    {conflict.type ||
+                      "Source conflict"}
                   </b>
 
-                  <p>
-                    {conflict.source_a}:{" "}
-                    {conflict.source_a_value}
-                  </p>
+                  {conflict.source_a && (
+                    <p>
+                      {conflict.source_a}:{" "}
+                      {conflict.source_a_value}
+                    </p>
+                  )}
 
-                  <p>
-                    {conflict.source_b}:{" "}
-                    {conflict.source_b_value}
-                  </p>
+                  {conflict.source_b && (
+                    <p>
+                      {conflict.source_b}:{" "}
+                      {conflict.source_b_value}
+                    </p>
+                  )}
 
-                  <small>
-                    {conflict.status}
-                  </small>
+                  {conflict.description && (
+                    <p>
+                      {conflict.description}
+                    </p>
+                  )}
+
+                  {conflict.status && (
+                    <small>
+                      {conflict.status}
+                    </small>
+                  )}
+
+                  {conflict.resolution && (
+                    <small>
+                      Resolution:{" "}
+                      {conflict.resolution}
+                    </small>
+                  )}
 
                 </div>
-
               )
             )}
 
           </section>
-
 
           <section className="card">
 
@@ -1328,7 +1329,6 @@ function AgentRun({
                 {}
             ).map(
               ([key, value]) => (
-
                 <div
                   className="validation-row"
                   key={key}
@@ -1347,7 +1347,6 @@ function AgentRun({
                   </b>
 
                 </div>
-
               )
             )}
 
@@ -1356,11 +1355,9 @@ function AgentRun({
         </div>
 
       </div>
-
     </>
   );
 }
-
 
 // ==================================================
 // CONFLICTS
@@ -1368,9 +1365,8 @@ function AgentRun({
 
 function Conflicts({
   runs,
-  openRun
+  openRun,
 }) {
-
   const reviewRuns =
     runs.filter(
       (run) =>
@@ -1379,19 +1375,19 @@ function Conflicts({
 
   return (
     <>
-
       <PageHeader
         eyebrow="SAFETY & RECONCILIATION"
         title="Conflicts"
         description="Unresolved inconsistencies surfaced for human review."
       />
 
-
       <section className="card">
 
         <div className="warning-banner">
 
-          <span>⚠</span>
+          <span>
+            ⚠
+          </span>
 
           <div>
 
@@ -1410,9 +1406,7 @@ function Conflicts({
 
         </div>
 
-
         {reviewRuns.map((run) => (
-
           <div
             className="conflict-row"
             key={run.id}
@@ -1428,6 +1422,7 @@ function Conflicts({
             />
 
             <button
+              type="button"
               className="link-button"
               onClick={() =>
                 openRun(run.id)
@@ -1437,7 +1432,6 @@ function Conflicts({
             </button>
 
           </div>
-
         ))}
 
         {reviewRuns.length === 0 && (
@@ -1447,11 +1441,9 @@ function Conflicts({
         )}
 
       </section>
-
     </>
   );
 }
-
 
 // ==================================================
 // ACTIVITY
@@ -1459,9 +1451,8 @@ function Conflicts({
 
 function Activity({
   runs,
-  openRun
+  openRun,
 }) {
-
   const activities =
     runs.flatMap((run) =>
       (run.steps || [])
@@ -1469,19 +1460,17 @@ function Activity({
         .map((step, index) => ({
           run,
           step,
-          index
+          index,
         }))
     );
 
   return (
     <>
-
       <PageHeader
         eyebrow="AUDIT TRAIL"
         title="Activity"
         description="Persistent agent execution history for traceability."
       />
-
 
       <section className="card">
 
@@ -1489,10 +1478,10 @@ function Activity({
           ({
             run,
             step,
-            index
+            index,
           }) => (
-
             <button
+              type="button"
               className="activity-row"
               key={`${run.id}-${index}`}
               onClick={() =>
@@ -1501,7 +1490,8 @@ function Activity({
             >
 
               <span>
-                {step.status === "warning"
+                {step.status ===
+                "warning"
                   ? "!"
                   : "✓"}
               </span>
@@ -1523,7 +1513,6 @@ function Activity({
               </small>
 
             </button>
-
           )
         )}
 
@@ -1534,27 +1523,22 @@ function Activity({
         )}
 
       </section>
-
     </>
   );
 }
-
 
 // ==================================================
 // SETTINGS
 // ==================================================
 
 function Settings() {
-
   return (
     <>
-
       <PageHeader
         eyebrow="CONFIGURATION"
         title="Settings"
         description="Environment and safety configuration for the prototype."
       />
-
 
       <div className="dashboard-grid">
 
@@ -1566,7 +1550,6 @@ function Settings() {
           />
 
           <p>
-
             <b>
               Flask API
             </b>
@@ -1576,12 +1559,9 @@ function Settings() {
             <code>
               {API}
             </code>
-
           </p>
 
-
           <p>
-
             <b>
               Environment
             </b>
@@ -1591,11 +1571,9 @@ function Settings() {
             <span className="tag">
               SYNTHETIC
             </span>
-
           </p>
 
         </section>
-
 
         <section className="card setting-card">
 
@@ -1622,20 +1600,17 @@ function Settings() {
         </section>
 
       </div>
-
     </>
   );
 }
-
 
 // ==================================================
 // EMPTY
 // ==================================================
 
 function Empty({
-  children
+  children,
 }) {
-
   return (
     <div className="empty">
 
@@ -1651,6 +1626,9 @@ function Empty({
   );
 }
 
+// ==================================================
+// RENDER
+// ==================================================
 
 createRoot(
   document.getElementById("root")
