@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 
-const API = "http://127.0.0.1:5000";
+const API = "https://medisync-backend-eam5.onrender.com";
 
 const navigation = [
   ["Dashboard", "▦"],
